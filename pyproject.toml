@@ -4,7 +4,7 @@ build-backend = 'setuptools.build_meta'
 
 [project]
 name = 'mediafire-download'
-version = '0.4.12'
+version = '0.2.13'
 authors = [
     {name = 'trickerer01'},
 ]
