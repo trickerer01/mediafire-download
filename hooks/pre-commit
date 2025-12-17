@@ -1,0 +1,5 @@
+#!/bin/sh
+python mediafire_download/genrev.py
+git add mediafire_download/version.py
+git add pyproject.toml
+ruff check --fix --unsafe-fixes --show-fixes
