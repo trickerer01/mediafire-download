@@ -17,7 +17,7 @@ SITE_API = f'{SITE_PRIMARY}/api'
 def compose_link_v15(folder_key: str, file_key: str, name: str) -> str:
     if name and (folder_key or file_key):
         if folder_key:
-            link = f'{SITE_PRIMARY}/folder/{folder_key}/{name}/folder'
+            link = f'{SITE_PRIMARY}/folder/{folder_key}/{name}'
             if file_key:
                 link = f'{link}/file/{file_key}'
         else:  # if file_key

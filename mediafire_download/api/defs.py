@@ -17,6 +17,7 @@ HTTPS_PREFIX = 'https://'
 
 SITE_PRIMARY = f'{HTTPS_PREFIX}www.mediafire.com'
 SITE_API = f'{SITE_PRIMARY}/api'
+API_VERSION = '1.5'
 
 
 class DownloadMode(str, Enum):

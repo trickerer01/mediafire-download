@@ -14,12 +14,12 @@ import random
 import re
 import sys
 import warnings
-from asyncio import gather, sleep
+from asyncio import Semaphore, create_task, gather, sleep
 from collections.abc import Callable
 from gzip import BadGzipFile, GzipFile
 from inspect import get_annotations
 from io import BytesIO
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from aiofile import async_open
 from aiohttp import (
@@ -37,13 +37,18 @@ from bs4 import BeautifulSoup
 from mediafire_download.util import UAManager, compose_link_v15
 
 from .containers import (
-    ActionResponse,
+    APIFileInfoResponse,
+    APIFolderContentResponse,
+    APIFolderInfoResponse,
     APIResponse,
     DownloadParams,
     FileInfo,
+    FilePathMapping,
+    FileSystemMapping,
+    FolderInfo,
     ParsedUrl,
 )
-from .defs import CONNECT_RETRY_DELAY, SITE_API, UTF8, DownloadMode, Mem
+from .defs import API_VERSION, CONNECT_RETRY_DELAY, SITE_API, UTF8, DownloadMode, Mem
 from .exceptions import MediafireErrorCodes, RequestError, ValidationError
 from .filters import Filter, any_filter_matching
 from .logging import Log, set_logger
@@ -51,6 +56,8 @@ from .options import MediafireOptions
 from .request_queue import RequestQueue
 
 __all__ = ('Mediafire',)
+
+APIContentTypes: TypeAlias = Literal['files', 'folder', 'folders']
 
 re_mediafire_file = re.compile(r'\W(\w{14,})\W')
 re_mediafire_folder = re_mediafire_file
@@ -101,9 +108,7 @@ class Mediafire:
     def _make_download_params(
         num: int, num_orig: int, file_url: str, output_path: pathlib.Path, expected_size: int, file_hash: str,
     ) -> DownloadParams:
-        return DownloadParams(
-            num, num_orig, file_url, output_path, expected_size, file_hash,
-        )
+        return DownloadParams(num, num_orig, file_url, output_path, expected_size, file_hash)
 
     def _before_download(self, *args) -> None:
         pass
@@ -187,20 +192,46 @@ class Mediafire:
         Log.error('Unable to connect. Aborting')
         raise ConnectionError
 
-    async def _get_files_or_folders_info(self, content_type: Literal['files', 'folders'], get_content: bool, chunk_num: int) -> APIResponse:
+    async def _query_folder_info(
+        self, content_type: APIContentTypes, folder_key: str, get_content: bool, chunk_num: int,
+    ) -> APIResponse:
         content_selector = 'get_content' if get_content else 'get_info'
         endpoint = (
-            f'{SITE_API}/1.5/folder'  # TODO: extract used API version
-            f'/{content_selector}.php?r=utga&content_type={content_type}'
-            f'&filter=all&order_by=name&order_direction=asc&chunk={chunk_num}'
-            f'&version=1.5&folder_key={self._parsed.folder_key}&response_format=json'
+            f'{SITE_API}/{API_VERSION}/folder/{content_selector}.php?r=utga&content_type={content_type}&filter=all&order_by=name'
+            f'&order_direction=asc&chunk={chunk_num}&version={API_VERSION}&folder_key={folder_key}&response_format=json'
         )
         return await self._query_api(endpoint)
 
-    async def _get_file_info(self) -> ActionResponse:
-        endpoint = (
-            f'{SITE_API}/file/get_info.php?quick_key={self._parsed.file_key}&response_format=json'
-        )
+    async def _wrap_chunked_api_folder_query(
+        self, content_type: APIContentTypes, folder_key: str,
+    ) -> APIFolderContentResponse:
+        results: APIFolderContentResponse | None = None
+        chunk_num = 1
+        more_chunks = True
+        while more_chunks:
+            chunks_result = await self._query_folder_info(content_type, folder_key, True, chunk_num)
+            response: APIFolderContentResponse = chunks_result['response']
+            if results is not None:
+                results.update(**response)
+            else:
+                results = response
+            chunk_num += 1
+            more_chunks = response['folder_content'].get('more_chunks', 'no') == 'yes'
+        assert results
+        return results
+
+    async def _get_folder_folders(self, folder_key: str) -> APIFolderContentResponse:
+        return await self._wrap_chunked_api_folder_query('folders', folder_key)
+
+    async def _get_folder_files(self, folder_key: str) -> APIFolderContentResponse:
+        return await self._wrap_chunked_api_folder_query('files', folder_key)
+
+    async def _get_folder_info(self, folder_key: str) -> APIFolderInfoResponse:
+        api_response = await self._query_folder_info('folder', folder_key, False, 1)
+        return api_response['response']
+
+    async def _get_file_info(self) -> APIFileInfoResponse:
+        endpoint = f'{SITE_API}/file/get_info.php?quick_key={self._parsed.file_key}&response_format=json'
         response: APIResponse = await self._query_api(endpoint)
         return response['response']
 
@@ -250,6 +281,47 @@ class Mediafire:
         Log.info(f'Downloaded {len([c for c in results if isinstance(c, pathlib.Path)])} / {len(tasks)} files')
         return results
 
+    async def _download_folder(self) -> tuple[pathlib.Path, ...]:
+        action_response: APIFolderInfoResponse = await self._get_folder_info(self._parsed.folder_key)
+        folder: FolderInfo = action_response['folder_info']
+        ftree: FileSystemMapping = await self._build_file_system(folder)
+        files: FilePathMapping = {p: f for p, f in ftree.items() if 'filename' in f}
+        Log.info(f'{folder["name"]}: found {len(files):d} files...')
+
+        for fidx, fpath in enumerate(files):
+            files[fpath]['num_in_queue'] = fidx + 1
+
+        self._after_scan(folder, ftree)
+
+        self._queue_size_orig = len(files)
+        proc_queue: set[pathlib.PurePosixPath] = self._filter_folder_files(files)
+        self._queue_size = len(proc_queue)
+        Log.info(f'Saving {self._queue_size:d} / {len(files):d} files...')
+
+        async def download_folder_file_wrapper(index: int, file: FileInfo, file_path: pathlib.Path) -> pathlib.Path:
+            download_params = self._make_download_params(
+                index, file['num_in_queue'], file['links']['normal_download'], file_path, int(file['size']), file['hash'],
+            )
+            self._before_download(download_params)
+            async with semaphore:
+                return await self._download(download_params)
+
+        semaphore = Semaphore(self._max_jobs)
+        tasks = []
+        idx = 0
+        for path, file_or_folder in ftree.items():
+            if self._aborted:
+                return ()
+            if path not in proc_queue:
+                Log.trace(f'Skipping excluded node {file_or_folder!s} ({path})...')
+                continue
+            tasks.append(create_task(download_folder_file_wrapper(idx, file_or_folder, pathlib.Path(path))))
+            idx += 1
+
+        results: tuple[pathlib.Path | BaseException, ...] = await gather(*tasks)
+        Log.info(f'Downloaded {len([c for c in results if isinstance(c, pathlib.Path)])} / {len(tasks)} files')
+        return results
+
     async def download_url(self, url: str) -> tuple[pathlib.Path, ...]:
         """
         Parse given folder or file URL and download found files
@@ -264,26 +336,26 @@ class Mediafire:
         if self._parsed.folder_key and self._parsed.file_key:
             Log.info(f'Pre-selected file {self._parsed.file_key}...')
         if self._parsed.folder_key:
-            # return await self._download_folder()
-            Log.warn('Folders are not supported. Wait for the fix')
+            return await self._download_folder()
         else:
             return await self._download_file(),  # noqa: COM818
 
     async def _download_file(self) -> pathlib.Path:
-        action_response: ActionResponse = await self._get_file_info()
+        action_response: APIFileInfoResponse = await self._get_file_info()
         assert action_response['result'] == 'Success', f'Result was \'{action_response["result"]}\'!'
-        file_info: FileInfo = action_response['file_info']
-        file_name = file_info['filename']
-        file_size = int(file_info['size'])
-        file_hash = file_info['hash']
-        file_url = file_info['links']['normal_download']
+        assert action_response['current_api_version'] == API_VERSION, f'Unexpected API version {action_response["current_api_version"]}!'
+        file: FileInfo = action_response['file_info']
+        file_name = file['filename']
+        file_url = file['links']['normal_download']
+        file_size = int(file['size'])
+        file_hash = file['hash']
 
-        file_info['num_in_queue'] = 1
+        file['num_in_queue'] = 1
         self._queue_size_orig = 1
         self._queue_size = 1
         output_path = self._dest_base / file_name
 
-        if ffilter := any_filter_matching(file_info, self._filters):
+        if ffilter := any_filter_matching(file, self._filters):
             Log.info(f'File {file_name} was filtered out by {ffilter!s}. Skipped!')
             return output_path
 
@@ -390,6 +462,59 @@ class Mediafire:
         Log.error(f'FAILED to download {output_path.name}!')
         return pathlib.Path()
 
+    def _filter_folder_files(self, ftree: dict[pathlib.PurePosixPath, FileInfo]) -> set[pathlib.PurePosixPath]:
+        proc_queue = set[pathlib.PurePosixPath]()
+        file_idx = 0
+        enqueued_idx = 0
+        for qpath, file in ftree.items():
+            if self._aborted:
+                break
+            file_idx += 1
+            if self._parsed.folder_key and self._parsed.file_key:
+                do_append = file['quickkey'] == self._parsed.file_key
+                if not do_append:
+                    Log.trace(f'[{file_idx:d}] File \'{qpath.name}\' is not selected for download, skipped...')
+                    continue
+            elif self._filters:
+                if ffilter := any_filter_matching(file, self._filters):
+                    Log.info(f'[{file_idx:d}] File {qpath.name} was filtered out by {ffilter!s}. Skipped!')
+                    continue
+                do_append = True
+            else:
+                file_size = int(file['size'])
+                ans = 'y' if self._noconfirm else 'q'
+                while ans not in 'nNyY10':
+                    ans = input(f'[{file_idx:d}] Download {qpath.name} ({file_size / Mem.MB:.2f} MB)? [Y/n]\n')
+                do_append = ans in 'yY1'
+            if do_append:
+                enqueued_idx += 1
+                Log.info(f'[{enqueued_idx:d}] {qpath.name} enqueued...')
+                proc_queue.add(qpath)
+        return proc_queue
+
+    async def _build_file_system(self, root_folder: FolderInfo) -> FileSystemMapping:
+        async def build_path_tree(parent_folder: FolderInfo, parent_folder_path: pathlib.PurePosixPath) -> None:
+            folder_key = parent_folder['folderkey']
+            if int(parent_folder.get('file_count', '0')) > 0:
+                files_response: APIFolderContentResponse = await self._get_folder_files(folder_key)
+                for file_info in files_response['folder_content'].get('files', []):
+                    file_path = parent_folder_path / file_info['filename'].strip()
+                    path_mapping[file_path] = file_info
+            if int(parent_folder.get('folder_count', '0')) > 0:
+                subfolders_response: APIFolderContentResponse = await self._get_folder_folders(folder_key)
+                for folder_info in subfolders_response['folder_content'].get('folders', []):
+                    folder_path = parent_folder_path / folder_info['name'].strip()
+                    path_mapping[folder_path] = folder_info
+                    await build_path_tree(folder_info, folder_path)
+
+        root_name = root_folder['name']
+        root_path = pathlib.PurePosixPath(self._dest_base.joinpath(root_name.strip()))
+        path_mapping: FileSystemMapping = {root_path: root_folder}
+        await build_path_tree(root_folder, root_path)
+
+        sorted_mapping: FileSystemMapping = {k: path_mapping[k] for k in sorted(path_mapping)}
+        return sorted_mapping
+
     @staticmethod
     def _parse_url(url: str) -> ParsedUrl:
         folder_lookup1 = '/folder/'
@@ -399,11 +524,11 @@ class Mediafire:
         folder_key = ''
         file_key = ''
         if has_folder:
-            # ex: {SITE}/folder/aoxkjmx3y/asd.rar/  # TODO: unknown
+            # ex: {SITE}/folder/aoxkjmx3y/awesometitle/
             parts = url.split(folder_lookup1, 1)[1]
             folder_key, name = tuple(parts.split('/')[:2])
         elif has_file1 or has_file2:
-            # {SITE}/file/oxteykmx3y/fstaj.rar/file
+            # ex. {SITE}/file/oxteykmx3y/fstaj.rar/file
             url = url.replace(' ', '')
             fmatch = re_mediafire_file.search(url)
             assert fmatch, f'Unable to parse url v2: file id not found in \'{url}\'!'
