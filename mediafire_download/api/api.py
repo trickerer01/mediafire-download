@@ -439,7 +439,7 @@ class Mediafire:
                             i += 1
                             if try_num and chunk_size:
                                 try_num = 0
-                            if i % 100 == 1:
+                            if i % 100 == 1 or bytes_written + 1 * Mem.MB >= expected_size:
                                 dwn_progress_str = f'+{chunk_size:d} ({bytes_written / Mem.MB:.2f} / {expected_size / Mem.MB:.2f} MB)'
                                 Log.info(f'[{num:d} / {self._queue_size:d}] {output_path.name} chunk {i:d}: {dwn_progress_str}...')
                 break
