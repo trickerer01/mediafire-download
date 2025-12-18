@@ -27,7 +27,6 @@ from aiohttp import (
     ClientConnectorError,
     ClientPayloadError,
     ClientResponse,
-    ClientResponseError,
     ClientSession,
     ClientTimeout,
     TCPConnector,
@@ -58,6 +57,8 @@ from .options import MediafireOptions
 from .request_queue import RequestQueue
 
 __all__ = ('Mediafire',)
+
+CLIENT_CONNECTOR_ERRORS = (ClientPayloadError, ClientConnectorError)
 
 APIContentTypes: TypeAlias = Literal['files', 'folder', 'folders']
 
@@ -176,7 +177,7 @@ class Mediafire:
                 if isinstance(e, RequestError):
                     if e.code not in (MediafireErrorCodes.EUNK,):
                         break
-                if (r is None or r.status != 403) and not isinstance(e, (ClientPayloadError, ClientResponseError, ClientConnectorError)):
+                if (r is None or r.status != 403) and not isinstance(e, CLIENT_CONNECTOR_ERRORS):
                     try_num += 1
                     Log.error(f'_query_api: error #{try_num:d}...')
                 if r is not None and not r.closed:
@@ -456,8 +457,7 @@ class Mediafire:
                 break
             except Exception as e:
                 Log.error(f'{output_path.name}: {sys.exc_info()[0]}: {sys.exc_info()[1]}')
-                if (r is None or r.status not in (403,)) and not isinstance(e, (
-                   ClientPayloadError, ClientResponseError, ClientConnectorError)):
+                if (r is None or r.status not in (403,)) and not isinstance(e, CLIENT_CONNECTOR_ERRORS):
                     try_num += 1
                     Log.error(f'{output_path.name}: error #{try_num:d}...')
                 if r is not None and not r.closed:
