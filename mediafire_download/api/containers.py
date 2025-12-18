@@ -9,7 +9,19 @@ Author: trickerer (https://github.com/trickerer, https://github.com/trickerer01)
 from __future__ import annotations
 
 import pathlib
+from enum import IntEnum
 from typing import Literal, NamedTuple, TypeAlias, TypedDict
+
+
+class FileFlags(IntEnum):
+    OWNED = 1  # owned by the current session user
+    PREVIEW = 2  # file is supported for preview
+    EDITABLE = 4  # file is editable
+    VIRUS = 8  # file is flagged by virus scanner
+
+
+class FolderFlags(IntEnum):
+    OWNED = 1  # owned by the current session user
 
 
 class Permissions(TypedDict):
@@ -20,7 +32,15 @@ class Permissions(TypedDict):
 
 
 class FileLinks(TypedDict):
+    view: str  # URL, may be absent, unsupported
+    read: str  # URL, may be absent, unsupported
+    edit: str  # URL, may be absent, unsupported
+    watch: str  # URL, may be absent, unsupported
+    listen: str  # URL, may be absent, unsupported
     normal_download: str  # URL
+    direct_download: str  # URL, may be absent, unsupported
+    streaming: str  # URL, may be absent, unsupported
+    download: str  # URL, may be absent, unsupported
 
 
 class FileInfo(TypedDict):
@@ -36,7 +56,7 @@ class FileInfo(TypedDict):
     filetype: str  # Literal?
     mimetype: str  # 'application/x-rar'
     owner_name: str
-    flag: str  # numeric
+    flag: str  # numeric, see FileFlags
     permissions: Permissions
     revision: str  # numeric
     view: str  # numeric
@@ -64,7 +84,7 @@ class FolderInfo(TypedDict):
     revision: str  # numeric
     owner_name: str  # unused
     avatar: str  # URL, unused
-    flag: str  # numeric
+    flag: str  # numeric, see FolderFlags
     permissions: Permissions
     created_utc: str  # ISO timestamp
 
