@@ -52,7 +52,7 @@ class FileInfo(TypedDict):
     size: str  # numeric
     privacy: Literal['public', 'private']
     password_protected: Literal['yes', 'no']
-    hash: str
+    hash: str  # sha256 hash (API 1.5)
     filetype: str  # Literal?
     mimetype: str  # 'application/x-rar'
     owner_name: str

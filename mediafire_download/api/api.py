@@ -8,6 +8,7 @@ Author: trickerer (https://github.com/trickerer, https://github.com/trickerer01)
 
 from __future__ import annotations
 
+import hashlib
 import json
 import pathlib
 import random
@@ -377,13 +378,23 @@ class Mediafire:
         touch = self._download_mode == DownloadMode.TOUCH
 
         if output_path.is_file():
-            # TODO: check hash
             existing_size = output_path.stat().st_size
+            expected_hash = params.file_hash
+            existing_hash = hashlib.sha256()
             if not (touch and existing_size == 0):
-                size_match_msg = f'({"COMPLETE" if existing_size == expected_size else "MISMATCH!"})'
+                if existing_size == expected_size:
+                    async with async_open(output_path, 'rb') as infile_existing:
+                        async for chunk in infile_existing.iter_chunked(4 * Mem.MB):
+                            existing_hash.update(chunk)
+                    if existing_hash.hexdigest() == expected_hash:
+                        size_match_msg = '(COMPLETE, HASH MATCHES)'
+                    else:
+                        size_match_msg = '(HASH MISMATCH!)'
+                else:
+                    size_match_msg = '(SIZE MISMATCH!)'
                 exists_msg = f'{output_path} already exists, size: {existing_size / Mem.MB:.2f} MB {size_match_msg}'
                 Log.info(exists_msg)
-                if self._noconfirm and existing_size == expected_size:
+                if self._noconfirm and existing_size == expected_size and existing_hash.hexdigest() == expected_hash:
                     return output_path
                 ans = 'q'
                 while ans not in 'yYnN01':
