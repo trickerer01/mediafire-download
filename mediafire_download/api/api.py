@@ -42,6 +42,7 @@ from .containers import (
     APIFolderInfoResponse,
     APIResponse,
     DownloadParams,
+    FileFlags,
     FileInfo,
     FilePathMapping,
     FileSystemMapping,
@@ -310,6 +311,9 @@ class Mediafire:
                 return ()
             if path not in proc_queue:
                 Log.trace(f'Skipping excluded node {file_or_folder!s} ({path})...')
+                continue
+            if int(file_or_folder['flag']) & FileFlags.VIRUS:
+                Log.warn(f'WARNING: file \'{pathlib.Path(path).relative_to(self._dest_base).as_posix()}\' was marked as VIRUS! SKIPPED!')
                 continue
             tasks.append(create_task(download_folder_file_wrapper(idx, file_or_folder, pathlib.Path(path))))
             idx += 1
