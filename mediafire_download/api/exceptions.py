@@ -14,6 +14,8 @@ __all__ = ('MediafireError', 'MediafireErrorCodes', 'RequestError', 'ValidationE
 class MediafireErrorCodes(IntEnum):
     ESUCCESS = 0
     EUNK = -1
+    ESESSIONTOKEN = -2
+    EUNKNOWNRESPONSE = -3
     MEDIAFIRE_ERROR_CODE_GENERIC = -255
 
     def __str__(self) -> str:
@@ -21,7 +23,10 @@ class MediafireErrorCodes(IntEnum):
 
 
 MEDIAFIRE_ERROR_DESCRIPTION: dict[MediafireErrorCodes, tuple[str, str]] = {
-    MediafireErrorCodes.EUNK: ('EUNK', 'An internal error has occurred. Please submit a bug report, '),
+    MediafireErrorCodes.ESUCCESS: ('ESUCCESS', 'Operation finished successfully'),
+    MediafireErrorCodes.EUNK: ('EUNK', 'An internal error has occurred. Please submit a bug report'),
+    MediafireErrorCodes.ESESSIONTOKEN: ('ESESSIONTOKEN', 'No session token was provided'),
+    MediafireErrorCodes.EUNKNOWNRESPONSE: ('EUNKNOWNRESPONSE', 'API response is not recognized'),
     # fallback
     MediafireErrorCodes.MEDIAFIRE_ERROR_CODE_GENERIC: ('EGENERIC', 'Unknown error \'%d\''),
 }

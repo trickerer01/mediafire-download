@@ -151,11 +151,6 @@ class Mediafire:
         return await self._session.request(method, url, **kwargs)
 
     async def _query_api(self, endpoint: str) -> APIResponse | int:
-        def handle_int_resp(int_resp: int) -> int:
-            if int_resp == MediafireErrorCodes.ESUCCESS:
-                return int_resp
-            raise RequestError(int_resp)
-
         try_num = 0
         while try_num <= self._retries:
             r: ClientResponse | None = None
@@ -165,14 +160,15 @@ class Mediafire:
 
                 jresp: APIResponse | int = await r.json()
 
-                if isinstance(jresp, int):
-                    return handle_int_resp(jresp)
-                elif not isinstance(jresp, dict):
-                    raise RequestError(f'Unknown response: {jresp!r}')
+                if not isinstance(jresp, dict):
+                    Log.fatal(f'Unknown API response: {jresp!r}')
+                    raise RequestError(MediafireErrorCodes.EUNKNOWNRESPONSE)
+                elif jresp and 'error' in jresp:
+                    raise RequestError(MediafireErrorCodes.ESESSIONTOKEN)
                 elif jresp and 'response' in jresp:
                     return jresp
                 else:
-                    raise RequestError(f'Unknown response: {jresp!r}')
+                    raise RequestError(MediafireErrorCodes.EUNK)
             except Exception as e:
                 Log.error(f'_query_api: {sys.exc_info()[0]}: {sys.exc_info()[1]}')
                 if isinstance(e, RequestError):
