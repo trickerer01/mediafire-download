@@ -378,33 +378,44 @@ class Mediafire:
 
         touch = self._download_mode == DownloadMode.TOUCH
 
-        if output_path.is_file():
-            existing_size = output_path.stat().st_size
-            expected_hash = params.file_hash
-            existing_hash = hashlib.sha256()
-            if not (touch and existing_size == 0):
-                if existing_size == expected_size:
+        async def file_exists_exact(cur_size: int) -> Literal[1, 2, 3, 4]:
+            if not (touch and cur_size == 0):
+                if cur_size == expected_size:
+                    expected_hash = params.file_hash
+                    existing_hash = hashlib.sha256()
                     async with async_open(output_path, 'rb') as infile_existing:
-                        async for chunk in infile_existing.iter_chunked(4 * Mem.MB):
-                            existing_hash.update(chunk)
+                        async for hash_chunk in infile_existing.iter_chunked(4 * Mem.MB):
+                            existing_hash.update(hash_chunk)
                     if existing_hash.hexdigest() == expected_hash:
-                        size_match_msg = '(COMPLETE, HASH MATCHES)'
-                    else:
-                        size_match_msg = '(HASH MISMATCH!)'
-                else:
-                    size_match_msg = '(SIZE MISMATCH!)'
-                exists_msg = f'{output_path} already exists, size: {existing_size / Mem.MB:.2f} MB {size_match_msg}'
-                Log.info(exists_msg)
-                if self._noconfirm and existing_size == expected_size and existing_hash.hexdigest() == expected_hash:
+                        return 1
+                    return 2
+                return 3
+            return 4
+
+        existing_size = output_path.stat().st_size if output_path.is_file() else 0
+
+        file_exists_result = await file_exists_exact(existing_size)
+
+        if file_exists_result in (1, 2, 3):
+            if file_exists_result == 1:
+                size_match_msg = '(COMPLETE, HASH MATCHES)'
+            elif file_exists_result == 2:
+                size_match_msg = '(HASH MISMATCH!)'
+            else:
+                size_match_msg = '(SIZE MISMATCH!)'
+            exists_msg = f'{output_path} already exists, size: {existing_size / Mem.MB:.2f} MB {size_match_msg}'
+            Log.info(exists_msg)
+
+            if self._noconfirm and file_exists_result == 1:
+                return output_path
+            ans = 'q'
+            while ans not in 'yYnN01':
+                ans = 'y' if self._noconfirm else input(f'{exists_msg}. Overwrite? [y/N]\n')
+                if ans in 'nN0':
+                    Log.warn(f'{output_path.name} was skipped')
                     return output_path
-                ans = 'q'
-                while ans not in 'yYnN01':
-                    ans = 'y' if self._noconfirm else input(f'{exists_msg}. Overwrite? [y/N]\n')
-                    if ans in 'nN0':
-                        Log.warn(f'{output_path.name} was skipped')
-                        return output_path
-                    else:
-                        Log.warn(f'Overwriting {output_path.name}...')
+                else:
+                    Log.warn(f'Overwriting {output_path.name}...')
 
         touch_msg = ' <touch>' if touch else ''
         size_msg = '0.00 / ' if touch else ''
@@ -419,6 +430,9 @@ class Mediafire:
 
         try_num = 0
         while try_num <= self._retries:
+            if output_path.is_file() and await file_exists_exact(output_path.stat().st_size) == 1:
+                Log.info(f'{output_path} is already completed, size: {expected_size / Mem.MB:.2f}')
+                break
             r: ClientResponse | None = None
             try:
                 async with await self._wrap_request('GET', file_url, headers={'Accept-Encoding': 'gzip'}) as r:
