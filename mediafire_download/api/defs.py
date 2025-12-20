@@ -15,6 +15,7 @@ CONNECT_RETRY_DELAY = (4.0, 8.0)
 UTF8 = 'utf-8'
 HTTPS_PREFIX = 'https://'
 
+SITE_TAG = 'MediaFire'
 SITE_PRIMARY = f'{HTTPS_PREFIX}www.mediafire.com'
 SITE_API = f'{SITE_PRIMARY}/api'
 API_VERSION = '1.5'
