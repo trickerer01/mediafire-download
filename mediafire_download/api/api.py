@@ -49,7 +49,7 @@ from .containers import (
     FolderInfo,
     ParsedUrl,
 )
-from .defs import API_VERSION, CONNECT_RETRY_DELAY, SITE_API, UTF8, DownloadMode, Mem
+from .defs import API_VERSION, CONNECT_RETRY_DELAY, SITE_API, SITE_PRIMARY, UTF8, DownloadMode, Mem
 from .exceptions import MediafireErrorCodes, RequestError, ValidationError
 from .filters import Filter, any_filter_matching
 from .logging import Log, set_logger
@@ -408,7 +408,7 @@ class Mediafire:
 
         touch_msg = ' <touch>' if touch else ''
         size_msg = '0.00 / ' if touch else ''
-        Log.info(f'[{num:d} / {self._queue_size:d}] ([{num_orig:d} / {self._queue_size_orig}])'
+        Log.info(f'[{SITE_PRIMARY}] [{num:d} / {self._queue_size:d}] ([{num_orig:d} / {self._queue_size_orig}])'
                  f' Saving{touch_msg} {output_path.name} => {output_path} ({size_msg}{expected_size / Mem.MB:.2f} MB)...')
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -453,7 +453,8 @@ class Mediafire:
                                 try_num = 0
                             if i % 100 == 1 or bytes_written + 1 * Mem.MB >= expected_size:
                                 dwn_progress_str = f'+{chunk_size:d} ({bytes_written / Mem.MB:.2f} / {expected_size / Mem.MB:.2f} MB)'
-                                Log.info(f'[{num:d} / {self._queue_size:d}] {output_path.name} chunk {i:d}: {dwn_progress_str}...')
+                                Log.info(f'[{SITE_PRIMARY}] [{num:d} / {self._queue_size:d}] {output_path.name}'
+                                         f' chunk {i:d}: {dwn_progress_str}...')
                 break
             except Exception as e:
                 Log.error(f'{output_path.name}: {sys.exc_info()[0]}: {sys.exc_info()[1]}')
