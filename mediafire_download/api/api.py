@@ -283,8 +283,9 @@ class Mediafire:
     async def _download_folder(self) -> tuple[pathlib.Path, ...]:
         action_response: APIFolderInfoResponse = await self._get_folder_info(self._parsed.folder_key)
         folder: FolderInfo = action_response['folder_info']
-        ftree: FileSystemMapping = await self._build_file_system(folder)
-        files: FilePathMapping = {p: ftree[p] for p in sorted(ftree, key=lambda p: ftree[p]['created']) if 'filename' in ftree[p]}
+        ftree_u: FileSystemMapping = await self._build_file_system(folder)
+        ftree: FileSystemMapping = {p: ftree_u[p] for p in sorted(ftree_u, key=lambda p: ftree_u[p]['created'])}
+        files: FilePathMapping = {p: f for p, f in ftree.items() if 'filename' in f}
         Log.info(f'{folder["name"]}: found {len(files):d} files...')
 
         for fidx, fpath in enumerate(files):
