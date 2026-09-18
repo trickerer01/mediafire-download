@@ -3,7 +3,7 @@
 **mediafire-download** is a simple mediafire.com shared files downloader
 
 ### Requirements
-- **Python 3.10 or greater**
+- **Python 3.11 or greater**
 - See `requirements.txt` for additional dependencies. Install with:
   - `python -m pip install -r requirements.txt`
 ### Usage
